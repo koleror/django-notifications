@@ -5,8 +5,9 @@ from django.db import models
 from .utils import id2slug
 from django.core.exceptions import ImproperlyConfigured
 from notifications.signals import notify
+from model_utils import managers
+from model_utils import Choices
 
-from model_utils import managers, Choices
 
 try:
     from django.utils import timezone
@@ -22,7 +23,7 @@ class NotificationQuerySet(models.query.QuerySet):
         return self.filter(unread=True)
 
     def read(self):
-        "Return only read items in the current queryset"
+        "Return only read items in the curxrent queryset"
         return self.filter(unread=False)
 
     def mark_all_as_read(self, recipient=None):
@@ -143,14 +144,22 @@ class Notification(models.Model):
             self.unread = False
             self.save()
 
-EXTRA_DATA = False
 if getattr(settings, 'NOTIFY_USE_JSONFIELD', False):
-    try:
-        from jsonfield.fields import JSONField
-    except ImportError:
-        raise ImproperlyConfigured("You must have a suitable JSONField installed")
-    JSONField(blank=True, null=True).contribute_to_class(Notification, 'data')
+    if 'mongodb' in settings.DATABASES:
+        try:
+            from djangotoolbox.fields import DictField
+        except ImportError:
+            raise ImproperlyConfigured("You must have a suitable JSONField installed")
+        DictField(blank=True, null=True).contribute_to_class(Notification, 'data')
+    else:
+        try:
+            from jsonfield.fields import JSONField
+        except ImportError:
+            raise ImproperlyConfigured("You must have a suitable JSONField installed")
+        JSONField(blank=True, null=True).contribute_to_class(Notification, 'data')
     EXTRA_DATA = True
+else:
+    EXTRA_DATA = False
 
 
 def notify_handler(verb, **kwargs):
@@ -178,7 +187,6 @@ def notify_handler(verb, **kwargs):
                     ContentType.objects.get_for_model(obj))
     if len(kwargs) and EXTRA_DATA:
         newnotify.data = kwargs
-
     newnotify.save()
 
 
