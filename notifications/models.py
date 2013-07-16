@@ -7,6 +7,7 @@ from django.core.exceptions import ImproperlyConfigured
 from notifications.signals import notify
 from model_utils import managers
 from model_utils import Choices
+from django.contrib.auth.models import User
 
 
 try:
@@ -78,7 +79,7 @@ class Notification(models.Model):
     """
     LEVELS = Choices('success', 'info', 'warning', 'error')
     level = models.CharField(choices=LEVELS, default='info', max_length=20)
-    recipient = models.ForeignKey(getattr(settings, "AUTH_USER_MODEL", 'django.contrib.auth.models.User'),
+    recipient = models.ForeignKey(getattr(settings, "AUTH_USER_MODEL", User),
                                   related_name="notifications")
     unread = models.BooleanField(default=True, blank=False)
 
@@ -104,8 +105,8 @@ class Notification(models.Model):
                                               'action_object_object_id')
 
     timestamp = models.DateTimeField(default=now)
-
     public = models.BooleanField(default=True)
+    custom_str_format = models.TextField(blank=True, null=True)
     objects = managers.PassThroughManager.for_queryset_class(NotificationQuerySet)()
 
     class Meta:
@@ -119,6 +120,13 @@ class Notification(models.Model):
             'target': self.target,
             'timesince': self.timesince()
         }
+        # bypassing ctx with custom_ctx if present
+        if self.custom_ctx:
+            for c in self.custom_ctx:
+                if c in ctx:
+                    ctx[c] = getattr(ctx[c], self.custom_ctx[c])
+        if self.custom_str_format:
+            return unicode(self.custom_str_format % ctx)
         if self.target:
             if self.action_object:
                 return u'%(actor)s %(verb)s %(action_object)s on %(target)s %(timesince)s ago' % ctx
@@ -151,12 +159,15 @@ if getattr(settings, 'NOTIFY_USE_JSONFIELD', False):
         except ImportError:
             raise ImproperlyConfigured("You must have a suitable JSONField installed")
         DictField(blank=True, null=True).contribute_to_class(Notification, 'data')
+        DictField(blank=True, null=True).contribute_to_class(Notification, 'custom_ctx')
     else:
         try:
             from jsonfield.fields import JSONField
         except ImportError:
             raise ImproperlyConfigured("You must have a suitable JSONField installed")
         JSONField(blank=True, null=True).contribute_to_class(Notification, 'data')
+        JSONField(blank=True, null=True).contribute_to_class(Notification, 'custom_ctx')
+    EXTRA_DATA = True
     EXTRA_DATA = True
 else:
     EXTRA_DATA = False
@@ -170,6 +181,8 @@ def notify_handler(verb, **kwargs):
     kwargs.pop('signal', None)
     recipient = kwargs.pop('recipient')
     actor = kwargs.pop('sender')
+    custom_ctx = kwargs.pop('custom_ctx', None)
+    custom_str_format = kwargs.pop('custom_str_format', None)
     newnotify = Notification(
         recipient=recipient,
         actor_content_type=ContentType.objects.get_for_model(actor),
@@ -177,7 +190,9 @@ def notify_handler(verb, **kwargs):
         verb=unicode(verb),
         public=bool(kwargs.pop('public', True)),
         description=kwargs.pop('description', None),
-        timestamp=kwargs.pop('timestamp', now())
+        timestamp=kwargs.pop('timestamp', now()),
+        custom_ctx=custom_ctx,
+        custom_str_format=custom_str_format
     )
     for opt in ('target', 'action_object'):
         obj = kwargs.pop(opt, None)
